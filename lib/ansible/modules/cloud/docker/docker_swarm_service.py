@@ -117,6 +117,16 @@ options:
     description:
     - List of the service environment variables.
     - Maps docker service --env option.
+  log_driver:
+    required: false
+    default: json-file
+    description:
+    - Configure the logging driver for a service
+  log_driver_options:
+    required: false
+    default: []
+    description:
+    - Options for service logging driver
   limit_cpu:
     required: false
     default: 0.000
@@ -232,6 +242,8 @@ ansible_swarm_service:
     "labels": {},
     "limit_cpu": 0.0,
     "limit_memory": 0,
+    "log_driver": "json-file",
+    "log_driver_options": {},
     "mode": "replicated",
     "mounts": [
       {
@@ -277,6 +289,11 @@ EXAMPLES = '''
             type: bind
         env:
         -   "ENVVAR1=envvar1"
+        log_driver: fluentd
+        log_driver_options:
+          fluentd-address: "127.0.0.1:24224"
+          fluentd-async-connect: true
+          tag: "{{.Name}}/{{.ID}}"
         restart_policy: any
         restart_policy_attempts: 5
         restart_policy_window: 30
@@ -391,6 +408,8 @@ class DockerService(DockerBaseClass):
         self.dns_search = []
         self.dns_options = []
         self.env = []
+        self.log_driver = "json-file"
+        self.log_driver_options  = {}
         self.labels = {}
         self.container_labels = {}
         self.limit_cpu = 0.000
@@ -452,6 +471,8 @@ class DockerService(DockerBaseClass):
         s.hostname = ap['hostname']
         s.tty = ap['tty']
         s.env = ap['env']
+        s.log_driver = ap['log_driver']
+        s.log_driver_options  = ap['log_driver_options']
         s.labels = ap['labels']
         s.container_labels = ap['container_labels']
         s.limit_cpu = ap['limit_cpu']
@@ -516,6 +537,10 @@ class DockerService(DockerBaseClass):
             differences.append('endpoint_mode')
         if self.env != os.env:
             differences.append('env')
+        if self.log_driver != os.log_driver:
+            differences.append('log_driver')
+        if self.log_driver_options  != os.log_driver_options :
+            differences.append('log_opt')
         if self.mode != os.mode:
             needs_rebuild = True
             differences.append('mode')
@@ -596,6 +621,9 @@ class DockerService(DockerBaseClass):
         cspec['TTY'] = self.tty
         cspec['Hostname'] = self.hostname
         cspec['Labels'] = self.container_labels
+
+        log_driver = {'Name': self.log_driver,
+                     'Options': self.log_driver_options}
         restart_policy = types.RestartPolicy(
             condition=self.restart_policy,
             delay=self.restart_policy_delay,
@@ -610,6 +638,7 @@ class DockerService(DockerBaseClass):
                 'MemoryBytes': self.reserve_memory * 1024 * 1024}}
         task_template = types.TaskTemplate(
             container_spec=cspec,
+            log_driver=log_driver,
             restart_policy=restart_policy,
             placement=self.constraints,
             resources=resources)
@@ -712,6 +741,9 @@ class DockerServiceManager():
                     ds.reserve_memory = int(task_template_data['Resources']['Reservations']['MemoryBytes']) / 1024 / 1024
 
         ds.labels = raw_data['Spec'].get('Labels', {})
+        if 'LogDriver' in task_template_data.keys():
+          ds.log_driver = task_template_data['LogDriver'].get('Name', 'json-file')
+          ds.log_driver_options = task_template_data['LogDriver'].get('Options', {})
         ds.container_labels = task_template_data['ContainerSpec'].get('Labels', {})
         mode = raw_data['Spec']['Mode']
         if 'Replicated' in mode.keys():
@@ -728,7 +760,8 @@ class DockerServiceManager():
                 'target': mount_data['Target'],
                 'readonly': mount_data.get('ReadOnly', False)})
         for raw_network_data in raw_data['Spec'].get('Networks', []):
-            network_name = [network_name_id['name'] for network_name_id in networks_names_ids if network_name_id['id'] == raw_network_data['Target']]
+            network_name = [network_name_id['name'] for network_name_id in networks_names_ids if
+                            network_name_id['id'] == raw_network_data['Target']]
             if len(network_name) == 0:
                 ds.networks.append(raw_network_data['Target'])
             else:
@@ -863,6 +896,8 @@ def main():
         networks=dict(default=[], type='list'),
         args=dict(default=[], type='list'),
         env=dict(default=[], type='list'),
+        log_driver=dict(default="json-file", type='str'),
+        log_driver_options=dict(default={}, type='dict'),
         publish=dict(default=[], type='list'),
         constraints=dict(default=[], type='list'),
         tty=dict(default=False, type='bool'),
