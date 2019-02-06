@@ -4,6 +4,7 @@
 # GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
 
 from __future__ import absolute_import, division, print_function
+
 __metaclass__ = type
 
 ANSIBLE_METADATA = {'status': ['preview'],
@@ -308,6 +309,7 @@ options:
     choices:
     - continue
     - pause
+    - rollback
   update_monitor:
     required: false
     default: 5000000000
@@ -326,6 +328,51 @@ options:
     description:
     - Specifies the order of operations when rolling out an updated task.
     - Maps to docker service --update-order
+    - Requires API version >= 1.29
+  rollback_delay:
+    required: false
+    default: 10
+    description:
+    - Rolling update delay
+    - Maps docker service --rollback-delay option
+    - Requires API version >= 1.28
+  rollback_parallelism:
+    required: false
+    default: 1
+    description:
+    - Rolling update parallelism
+    - Maps docker service --rollback-parallelism option
+    - Requires API version >= 1.28
+  rollback_failure_action:
+    required: false
+    default: continue
+    description:
+    - Action to take in case of container failure
+    - Maps to docker service --rollback-failure-action option
+    choices:
+    - continue
+    - pause
+    - Requires API version >= 1.28
+  rollback_monitor:
+    required: false
+    default: 5000000000
+    description:
+    - Time to monitor updated tasks for failures, in nanoseconds.
+    - Maps to docker service --rollback-monitor option
+    - Requires API version >= 1.28
+  rollback_max_failure_ratio:
+    required: false
+    default: 0.00
+    description:
+    - Fraction of tasks that may fail during an update before the failure action is invoked
+    - Maps to docker service --rollback-max-failure-ratio
+    - Requires API version >= 1.28
+  rollback_order:
+    required: false
+    default: null
+    description:
+    - Specifies the order of operations when rolling out an updated task.
+    - Maps to docker service --rollback-order
     - Requires API version >= 1.29
   user:
     type: str
@@ -593,6 +640,12 @@ class DockerService(DockerBaseClass):
         self.update_monitor = 5000000000
         self.update_max_failure_ratio = 0.00
         self.update_order = None
+        self.rollback_delay = None
+        self.rollback_parallelism = 1
+        self.rollback_failure_action = 'continue'
+        self.rollback_monitor = 5000000000
+        self.rollback_max_failure_ratio = 0.00
+        self.rollback_order = None
 
     def get_facts(self):
         return {
@@ -632,7 +685,14 @@ class DockerService(DockerBaseClass):
             'update_failure_action': self.update_failure_action,
             'update_monitor': self.update_monitor,
             'update_max_failure_ratio': self.update_max_failure_ratio,
-            'update_order': self.update_order}
+            'update_order': self.update_order,
+            'rollback_delay': self.rollback_delay,
+            'rollback_parallelism': self.rollback_parallelism,
+            'rollback_failure_action': self.rollback_failure_action,
+            'rollback_monitor': self.rollback_monitor,
+            'rollback_max_failure_ratio': self.rollback_max_failure_ratio,
+            'rollback_order': self.rollback_order,
+        }
 
     @staticmethod
     def from_ansible_params(ap, old_service, image_digest):
@@ -666,8 +726,13 @@ class DockerService(DockerBaseClass):
         s.update_monitor = ap['update_monitor']
         s.update_max_failure_ratio = ap['update_max_failure_ratio']
         s.update_order = ap['update_order']
+        s.rollback_parallelism = ap['rollback_parallelism']
+        s.rollback_delay = ap['rollback_delay']
+        s.rollback_failure_action = ap['rollback_failure_action']
+        s.rollback_monitor = ap['rollback_monitor']
+        s.rollback_max_failure_ratio = ap['rollback_max_failure_ratio']
+        s.rollback_order = ap['rollback_order']
         s.user = ap['user']
-
         s.command = ap['command']
         if isinstance(s.command, string_types):
             s.command = shlex.split(s.command)
@@ -831,6 +896,18 @@ class DockerService(DockerBaseClass):
             differences.add('update_max_failure_ratio', parameter=self.update_max_failure_ratio, active=os.update_max_failure_ratio)
         if self.update_order is not None and self.update_order != os.update_order:
             differences.add('update_order', parameter=self.update_order, active=os.update_order)
+        if self.rollback_delay != os.rollback_delay:
+            differences.add('rollback_delay', parameter=self.rollback_delay, active=os.rollback_delay)
+        if self.rollback_parallelism != os.rollback_parallelism:
+            differences.add('rollback_parallelism', parameter=self.rollback_parallelism, active=os.rollback_parallelism)
+        if self.rollback_failure_action != os.rollback_failure_action:
+            differences.add('rollback_failure_action', parameter=self.rollback_failure_action, active=os.rollback_failure_action)
+        if self.rollback_monitor != os.rollback_monitor:
+            differences.add('rollback_monitor', parameter=self.rollback_monitor, active=os.rollback_monitor)
+        if self.rollback_max_failure_ratio != os.rollback_max_failure_ratio:
+            differences.add('rollback_max_failure_ratio', parameter=self.rollback_max_failure_ratio, active=os.rollback_max_failure_ratio)
+        if self.rollback_order is not None and self.rollback_order != os.rollback_order:
+            differences.add('rollback_order', parameter=self.rollback_order, active=os.rollback_order)
         has_image_changed, change = self.has_image_changed(os.image)
         if has_image_changed:
             differences.add('image', parameter=self.image, active=change)
@@ -979,6 +1056,15 @@ class DockerService(DockerBaseClass):
             order=self.update_order
         )
 
+        rollback_config = types.UpdateConfig(
+            parallelism=int(self.rollback_parallelism),
+            delay=self.rollback_delay if self.rollback_delay else None,
+            monitor=self.rollback_monitor,
+            max_failure_ratio=float(self.rollback_max_failure_ratio),
+            order=self.rollback_order,
+            failure_action=self.rollback_failure_action
+        )
+
         task_template = types.TaskTemplate(
             container_spec=cspec,
             log_driver=log_driver,
@@ -1011,7 +1097,7 @@ class DockerService(DockerBaseClass):
             else:
                 ports[int(port['published_port'])] = (int(port['target_port']), port['protocol'])
         endpoint_spec = types.EndpointSpec(mode=self.endpoint_mode, ports=ports)
-        return update_policy, task_template, networks, endpoint_spec, mode, self.labels
+        return update_policy, rollback_config, task_template, networks, endpoint_spec, mode, self.labels
 
     # def fail(self, msg):
     #     self.parameters.client.module.fail_json(msg=msg)
@@ -1045,6 +1131,7 @@ class DockerServiceManager():
 
         task_template_data = raw_data['Spec']['TaskTemplate']
         update_config_data = raw_data['Spec']['UpdateConfig']
+        rollback_config_data = raw_data['Spec'].get('RollbackConfig', {})
 
         ds.image = task_template_data['ContainerSpec']['Image']
         ds.user = task_template_data['ContainerSpec'].get('User', None)
@@ -1056,6 +1143,15 @@ class DockerServiceManager():
         ds.update_failure_action = update_config_data['FailureAction']
         ds.update_monitor = update_config_data['Monitor']
         ds.update_max_failure_ratio = update_config_data['MaxFailureRatio']
+        if rollback_config_data:
+            if 'Delay' in rollback_config_data.keys():
+                ds.rollback_delay = float(rollback_config_data['Delay'])
+            if 'Monitor' in rollback_config_data.keys():
+                ds.rollback_monitor = float(rollback_config_data['Monitor'])
+            ds.rollback_parallelism = rollback_config_data.get('Parallelism')
+            ds.rollback_failure_action = rollback_config_data.get('FailureAction')
+            ds.rollback_max_failure_ratio = rollback_config_data.get('MaxFailureRatio')
+            ds.rollback_order = rollback_config_data.get('Order')
 
         if 'Order' in update_config_data:
             ds.update_order = update_config_data['Order']
@@ -1193,10 +1289,10 @@ class DockerServiceManager():
 
     def get_image_digest(self, name, resolve=True):
         if (
-            not name
-            or not resolve
-            or self.client.docker_py_version < LooseVersion('3.2')
-            or self.client.docker_api_version < LooseVersion('1.30')
+                not name
+                or not resolve
+                or self.client.docker_py_version < LooseVersion('3.2')
+                or self.client.docker_api_version < LooseVersion('1.30')
         ):
             return name
         repo, tag = parse_repository_tag(name)
@@ -1361,10 +1457,16 @@ def main():
         restart_policy_window=dict(default=0, type='int'),
         update_delay=dict(default=10, type='int'),
         update_parallelism=dict(default=1, type='int'),
-        update_failure_action=dict(default='continue', choices=['continue', 'pause']),
+        update_failure_action=dict(default='continue', choices=['continue', 'pause', 'rollback']),
         update_monitor=dict(default=5000000000, type='int'),
         update_max_failure_ratio=dict(default=0, type='float'),
         update_order=dict(default=None, type='str'),
+        rollback_delay=dict(default=10, type='int'),
+        rollback_parallelism=dict(default=1, type='int'),
+        rollback_failure_action=dict(default='pause', choices=['continue', 'pause']),
+        rollback_monitor=dict(default=5000000000, type='int'),
+        rollback_max_failure_ratio=dict(default=0, type='float'),
+        rollback_order=dict(default='stop-first', choises=['stop-first', 'start-first']),
         user=dict(type='str'))
 
     option_minimal_versions = dict(
