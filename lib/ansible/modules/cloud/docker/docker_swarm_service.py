@@ -837,7 +837,6 @@ class DockerService(DockerBaseClass):
         self.compare_attr('env', os, differences)
         self.compare_attr('log_driver', os, differences)
         self.compare_attr('log_driver_options', os, differences)
-        self.compare_attr('log_opt', os, differences)
         self.compare_attr('secrets', os, differences)
         self.compare_attr('mounts', os, differences)
         if not self.compare_attr('mode', os, differences):
@@ -897,7 +896,7 @@ class DockerService(DockerBaseClass):
         value1 = getattr(self, attr)
         value2 = getattr(os, attr)
         if value1 != value2:
-            differences.add('endpoint_mode', parameter=value1, active=value2)
+            differences.add(attr, parameter=value1, active=value2)
             return False
         return True
 
